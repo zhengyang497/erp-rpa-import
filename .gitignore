@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Probe / local dumps / e2e noise
+*_probe*.txt
+*.log
+e2e_*.txt
+src/run_all_result.log
+
+# Runtime / debug screenshots (keep templates/)
+src/*.png
+scripts/*.png
+scripts/*.txt
+!src/templates/
+!src/templates/**
