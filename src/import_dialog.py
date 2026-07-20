@@ -431,6 +431,7 @@ def finish_after_import(*, timeout: float = 30.0, kill_excel: bool = False) -> d
     - 导入后出现标题「导入数据」的结果窗，文案如「成功导入 88 条记录\\n完成」
     - 点「关闭」（不是确定）；主框「确认」常为 0×0，改用 ESC 关掉
     - 成功后可能再出「警告」弹窗（查询限制 50000），点「关闭」——原 RPA 没有这一步
+    - status: ok | empty | fail（fail 不在此抛错，由上层决定）
     """
     status, message, result_dlg = _wait_import_result(timeout=timeout)
     print(f"import result: {status}; msg={message[:120]!r}")
@@ -447,7 +448,6 @@ def finish_after_import(*, timeout: float = 30.0, kill_excel: bool = False) -> d
         keyboard.send_keys("{ESC}")
         time.sleep(0.4)
 
-    dlg_left, _, _ = find_import_dialog()
     # 若结果窗还在，再点一次关闭
     rw, _, _ = find_progress_dialog("导入数据")
     if rw is not None:
@@ -480,9 +480,6 @@ def finish_after_import(*, timeout: float = 30.0, kill_excel: bool = False) -> d
     print(f"import finish: {result}")
     if status == "empty":
         print("无导入记录（空文件/无有效行），按跳过处理，不视为失败")
-        return result
-    if status == "fail":
-        raise RuntimeError(f"导入失败: {result}")
     return result
 
 

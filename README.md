@@ -72,3 +72,12 @@ python src/import_futures_position.py --skip-menu
 # 仅验证 OCR 菜单导航（不打开模块）
 python src/open_module.py --dry-run
 ```
+
+## 运维（`all`）
+
+- 按模块分组：持仓菜单 1 次、成交菜单 1 次
+- 一条挂了继续跑：失败写入问题日志并清理对话框，再跑下一条
+- 空文件：ERP「没有可以导入的记录」记为跳过，不算失败
+- 日志：`src/logs/run_*.log`（全程）、`src/logs/problems_*.log`（仅问题）；可用 `--log-dir`
+
+退出码：全部成功或仅空跳过 → 0；有真实失败 → 1
