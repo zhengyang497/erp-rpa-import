@@ -339,18 +339,80 @@ def _focus_file_field(dlg) -> None:
     time.sleep(0.2)
 
 
-def _wait_progress_done(title: str, *, timeout: float) -> None:
-    """等待标题为 title 的进度窗出现后消失（检查数据过程）。"""
-    deadline = time.time() + timeout
+def _wait_progress_done(
+    title: str,
+    *,
+    timeout: float,
+    min_wait: float = 3.0,
+    settle: float = 0.8,
+) -> None:
+    """
+    等待标题为 title 的进度窗：出现 → 消失。
+    - 若一直没出现：至少再等到 min_wait（避免检查未完成就点导入）
+    - 若超时后进度窗仍在：抛错，不继续
+    """
+    start = time.time()
+    deadline = start + timeout
     seen = False
     while time.time() < deadline:
         w, _, _ = find_progress_dialog(title)
         if w is not None:
+            if not seen:
+                print(f"progress {title!r} appeared")
             seen = True
         elif seen:
-            return
+            time.sleep(settle)
+            if find_progress_dialog(title)[0] is None:
+                print(f"progress {title!r} gone")
+                return
         time.sleep(0.25)
-    # 没看到进度窗也继续（有的环境很快）
+
+    if find_progress_dialog(title)[0] is not None:
+        raise RuntimeError(f"等待「{title}」进度结束超时（>{timeout:.0f}s）")
+
+    elapsed = time.time() - start
+    if not seen:
+        left = max(0.0, min_wait - elapsed)
+        if left > 0:
+            print(
+                f"progress {title!r} not observed; settle {left:.1f}s "
+                f"(avoid clicking import too early)"
+            )
+            time.sleep(left)
+        # 再确认一次没有进度窗冒出来
+        end = time.time() + min(5.0, timeout * 0.1 + 1.0)
+        while time.time() < end:
+            if find_progress_dialog(title)[0] is not None:
+                # 晚出现：改走「出现后再等消失」
+                return _wait_progress_done(
+                    title, timeout=max(timeout - (time.time() - start), 15.0),
+                    min_wait=0, settle=settle,
+                )
+            time.sleep(0.25)
+    print(f"progress {title!r} wait finished seen={seen}")
+
+
+def _wait_ready_for_import(*, timeout: float = 45.0) -> object:
+    """
+    检查结束后：确认「检查数据」进度已消失，主导入框仍在且有「导入数据」。
+    返回主对话框控件。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if find_progress_dialog("检查数据")[0] is not None:
+            time.sleep(0.3)
+            continue
+        dlg, _, _ = find_import_dialog()
+        if dlg is not None:
+            names = set(_dialog_named_texts(dlg))
+            if "导入数据" in names and "检查数据" in names:
+                time.sleep(0.6)
+                # 双检：进度窗没有又冒出来
+                if find_progress_dialog("检查数据")[0] is None:
+                    print("import dialog ready after check")
+                    return dlg
+        time.sleep(0.3)
+    raise RuntimeError("检查数据后导入对话框未就绪（进度未结束或主框消失）")
 
 
 def _wait_import_result(*, timeout: float) -> tuple[str, str, object]:
@@ -511,11 +573,8 @@ def run_dialog_import(
     if not _click_dialog_button(dlg, "检查数据"):
         raise RuntimeError("未找到「检查数据」按钮")
     print("clicked 检查数据, waiting progress...")
-    _wait_progress_done("检查数据", timeout=wait_check)
-
-    dlg, _, _ = find_import_dialog()
-    if dlg is None:
-        raise RuntimeError("检查数据后主对话框消失")
+    _wait_progress_done("检查数据", timeout=wait_check, min_wait=3.0)
+    dlg = _wait_ready_for_import(timeout=max(45.0, wait_check * 0.5))
     if not _click_dialog_button(dlg, "导入数据"):
         raise RuntimeError("未找到「导入数据」按钮")
     print("clicked 导入数据, waiting result...")

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""统一入口：按 key 或一次跑四个（all 按模块分组；一条挂了继续跑 + 问题日志）。"""
+"""统一入口：按 key 或一次跑四个（all 按模块分组；一条挂了继续跑 + 问题报告）。"""
 from __future__ import annotations
 
 import argparse
@@ -58,24 +58,44 @@ def _run_one(
             "status": "fail",
             "message": detail,
             "path": "",
+            "module": flow.module,
+            "tab": flow.tab,
         }
         if log:
-            log.problem(flow_key=key, flow_name=flow.name, detail=f"{detail}\n{tb}")
+            log.problem(
+                flow_key=key,
+                flow_name=flow.name,
+                detail=f"{detail}\n{tb}",
+                module=flow.module,
+                tab=flow.tab,
+                step="运行",
+            )
         elif raise_on_fail:
             raise
         return result
 
     status = result.get("status", "fail")
     if log:
+        path = str(result.get("path") or "")
         if status == "ok":
             log.info(f"<<< ok {flow.name}: {result.get('message', '')[:120]}")
         elif status == "empty":
-            log.warn(f"<<< empty/skip {flow.name}: {result.get('message', '')[:120]}")
+            log.empty_skip(
+                flow_name=flow.name,
+                message=str(result.get("message", "没有可以导入的记录")),
+                file=path,
+                module=flow.module,
+                tab=flow.tab,
+            )
         else:
             log.problem(
                 flow_key=key,
                 flow_name=flow.name,
                 detail=str(result.get("message", "fail")),
+                file=path,
+                module=flow.module,
+                tab=flow.tab,
+                step="导入",
             )
             cleanup_after_failure()
     return result
@@ -134,10 +154,11 @@ def main() -> int:
             if st == "fail":
                 n_fail += 1
         log.summary(summary)
+        report = log.write_problem_report()
         if n_fail:
-            log.info(f"完成：{n_fail} 条失败，详见 {log.problem_path}")
+            log.info(f"完成：{n_fail} 条失败，详见 {report} 与 {log.problem_path}")
             return 1
-        log.info("完成：全部成功或空文件跳过")
+        log.info(f"完成：全部成功或空文件跳过。问题报告: {report}")
         return 0
 
     print(f"\n>>> {FLOWS[args.flow].name}")
@@ -150,7 +171,9 @@ def main() -> int:
         raise_on_fail=True,
         log=log,
     )
+    report = log.write_problem_report()
     if result.get("status") == "fail":
+        log.info(f"失败，详见 {report}")
         return 1
     return 0
 

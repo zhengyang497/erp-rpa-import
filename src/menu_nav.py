@@ -129,28 +129,45 @@ def _hover_dropdown_ocr(frame, text: str) -> tuple[int, int]:
     return x, y
 
 
-def _named_exists(frame, name: str) -> bool:
+def _named_exists(frame, name: str, *, require_visible: bool = False) -> bool:
     for c in frame.descendants():
         try:
-            if (c.element_info.name or "").strip() == name:
+            if (c.element_info.name or "").strip() != name:
+                continue
+            if not require_visible:
                 return True
+            r = c.rectangle()
+            if (r.right - r.left) > 1 and (r.bottom - r.top) > 1:
+                # 排除最小化到屏外的幽灵控件
+                if r.left > -1000 and r.top > -1000:
+                    return True
         except Exception:
             continue
     return False
 
 
-def _verify_opened(module: str) -> None:
-    """用 win32 锚点校验，不用 OCR。"""
-    frame = find_frame()
+def _verify_opened(module: str, *, timeout: float = 10.0) -> None:
+    """用 win32 锚点校验（轮询等待页面加载），不用 OCR。"""
     if module == "position_rpa":
-        ok = _named_exists(frame, "持仓日期从")
+        names = ("持仓日期从",)
         hint = "持仓日期从"
     else:
-        ok = _named_exists(frame, "交易日从") or _named_exists(frame, "持仓日期从")
-        hint = "交易日从/持仓日期从"
-    print(f"verify win32 anchor '{hint}': {ok}")
-    if not ok:
-        raise RuntimeError(f"打开后页面校验失败：未找到控件 {hint}")
+        names = ("交易日从", "交易日期从", "持仓日期从")
+        hint = "交易日从/交易日期从/持仓日期从"
+
+    deadline = time.time() + timeout
+    last_ok = False
+    while time.time() < deadline:
+        frame = find_frame()
+        # 优先可见控件；再接受仅存在于树中的命名控件（Swing 常见）
+        last_ok = any(_named_exists(frame, n, require_visible=True) for n in names) or any(
+            _named_exists(frame, n, require_visible=False) for n in names
+        )
+        print(f"verify win32 anchor '{hint}': {last_ok}")
+        if last_ok:
+            return
+        time.sleep(0.45)
+    raise RuntimeError(f"打开后页面校验失败：未找到控件 {hint}（等了 {timeout:.0f}s）")
 
 
 def open_position_rpa_module(*, dry_run: bool = False, verify: bool = True) -> None:
@@ -171,10 +188,11 @@ def open_position_rpa_module(*, dry_run: bool = False, verify: bool = True) -> N
         _dismiss_menus()
         return
     mouse.click(coords=(lx, ly))
-    time.sleep(1.2)
+    time.sleep(0.3)
+    _dismiss_menus()
+    time.sleep(1.5)
     if verify:
-        time.sleep(0.4)
-        _verify_opened("position_rpa")
+        _verify_opened("position_rpa", timeout=12.0)
 
 
 def open_trade_rpa_module(*, dry_run: bool = False, verify: bool = True) -> None:
@@ -199,10 +217,11 @@ def open_trade_rpa_module(*, dry_run: bool = False, verify: bool = True) -> None
         _dismiss_menus()
         return
     mouse.click(coords=(lx, ly))
-    time.sleep(1.2)
+    time.sleep(0.3)
+    _dismiss_menus()
+    time.sleep(1.5)
     if verify:
-        time.sleep(0.4)
-        _verify_opened("trade_rpa")
+        _verify_opened("trade_rpa", timeout=12.0)
 
 
 def open_module(module: str, *, dry_run: bool = False, verify: bool = True) -> None:

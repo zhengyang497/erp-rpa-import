@@ -3,6 +3,7 @@
 
 公共步骤（四条完全一致）：
   关旧导入框 →（可选）开模块 → 切页签 → Excel批量导入 → 粘贴/检查/导入/关窗
+  → 填起始日(账单日前一工作日)+查询（持仓用持仓日期从，成交用交易日期从）
 
 仅差异：
   - flow.module / open_module      —— 菜单
@@ -23,6 +24,7 @@ from import_dialog import (
     run_dialog_import,
 )
 from menu_nav import open_module
+from query_filter import after_import_query
 from tabs import switch_tab
 
 
@@ -111,6 +113,18 @@ def run_flow(
         "message": dialog_result.get("message", ""),
         "path": str(path),
     }
+    # 仅导入成功后查列表；空文件无账单日，跳过
+    if result["status"] == "ok":
+        try:
+            result["query_date"] = after_import_query(flow.module, path)
+        except Exception as exc:
+            message = f"查询失败: {exc}"
+            if raise_on_fail:
+                raise RuntimeError(message) from exc
+            result["status"] = "fail"
+            result["message"] = message
+    elif result["status"] == "empty":
+        print("空文件跳过导入后查询")
     if result["status"] == "fail" and raise_on_fail:
         raise RuntimeError(f"导入失败: {result}")
     return result
