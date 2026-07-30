@@ -208,7 +208,7 @@ def click_excel_batch_import(*, timeout: float = 15.0) -> bool:
             fr.left,
             date.top - 5,
             min(fr.right, fr.left + 900),
-            date.bottom + 90,
+            date.bottom + 110,
         )
     else:
         band_box = (fr.left, fr.top + 160, min(fr.right, fr.left + 900), fr.top + 340)
@@ -223,9 +223,11 @@ def click_excel_batch_import(*, timeout: float = 15.0) -> bool:
         hits = ocr_image(band)
         hit = find_best_hit(hits, "Excel批量导入")
         if hit is None:
+            hit = find_best_hit(hits, "批量导入")
+        if hit is None:
             for h in hits:
                 t = h.text.replace(" ", "")
-                if ("批量导入" in t or "Excel批量" in t) and "模板" not in t:
+                if ("批量导入" in t or "Excel批量" in t) and "模板" not in t and "导出" not in t:
                     hit = h
                     break
         if hit is not None:
@@ -235,14 +237,25 @@ def click_excel_batch_import(*, timeout: float = 15.0) -> bool:
     except Exception as e:
         print(f"ocr Excel批量导入 skipped: {e}")
 
-    # 2) 工具行第 2 个黄图标（第 1 个通常是模板下载）
+    # 2) 黄钥匙图标：过滤行工具栏(y小) 或 下方链接行(y大，成交页常见)
     centers = yellow_icon_centers(band)
-    toolbar = [c for c in centers if c[1] < 55]
-    if len(toolbar) >= 2:
-        p = (band_box[0] + toolbar[1][0], band_box[1] + toolbar[1][1])
+    toolbar_top = sorted([c for c in centers if c[1] < 55], key=lambda c: c[0])
+    toolbar_link = sorted([c for c in centers if c[1] >= 55], key=lambda c: c[0])
+    icon_pick = None
+    if len(toolbar_top) >= 2:
+        icon_pick = toolbar_top[1]
+    elif len(toolbar_link) >= 2:
+        icon_pick = toolbar_link[1]
+    elif len(centers) >= 2:
+        icon_pick = sorted(centers, key=lambda c: c[0])[1]
+    if icon_pick is not None:
+        p = (band_box[0] + icon_pick[0], band_box[1] + icon_pick[1])
         if p not in candidates:
             candidates.append(p)
-        print(f"yellow-icon Excel批量导入 candidate {p} icons={toolbar}")
+        print(
+            f"yellow-icon Excel批量导入 candidate {p} "
+            f"icons_top={toolbar_top} icons_link={toolbar_link}"
+        )
 
     # 3) 静态模板（持仓/成交布局各一份，按分数取）
     best_tpl: tuple[float, int, int] | None = None
