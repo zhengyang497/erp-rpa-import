@@ -9,11 +9,25 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-# 默认读 v2 输出目录
-DEFAULT_OUTPUT_V2 = Path(r"C:\Users\zhengyang\Documents\option-margin\output_v2")
+
+def _default_output_v2() -> Path:
+    """V2 账单目录：环境变量 > 同级 option-margin/output_v2 > 本仓库 output_v2。"""
+    env = os.environ.get("ERP_RPA_OUTPUT_DIR")
+    if env:
+        return Path(env)
+    root = Path(__file__).resolve().parent.parent
+    sibling = root.parent / "option-margin" / "output_v2"
+    if sibling.is_dir():
+        return sibling
+    return root / "output_v2"
+
+
+# 默认读 v2 输出目录（可用 ERP_RPA_OUTPUT_DIR 或 --output-dir 覆盖）
+DEFAULT_OUTPUT_V2 = _default_output_v2()
 
 
 @dataclass(frozen=True)

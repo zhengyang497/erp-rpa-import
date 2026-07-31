@@ -28,3 +28,6 @@ scripts/*.txt
 
 # Runtime logs / reports
 src/logs/
+
+# Local documents
+*.docx

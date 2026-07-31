@@ -39,7 +39,13 @@
 | 导入结果 | 读「成功导入 N 条」→「关闭」→ ESC |
 | 导入后查询 | 读 Excel 账单日，起始日填**前一工作日**并点「查询」（结束日留空）。持仓：`持仓日期从`；成交：`交易日期从` / `交易日从` |
 
-默认读取：`C:\Users\zhengyang\Documents\option-margin\output_v2\`
+默认读取（按优先级）：
+
+1. 环境变量 `ERP_RPA_OUTPUT_DIR`
+2. 同级目录 `../option-margin/output_v2`（若存在）
+3. 本仓库下 `output_v2/`
+
+也可用 `--output-dir` 指定。
 
 
 ## 导入后筛选查询
