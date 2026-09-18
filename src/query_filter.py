@@ -26,6 +26,7 @@ class FilterProfile:
 
 POSITION_FILTER = FilterProfile(kind="position", start_labels=("持仓日期从",))
 TRADE_FILTER = FilterProfile(kind="trade", start_labels=("交易日期从", "交易日从"))
+FUND_FILTER = FilterProfile(kind="fund", start_labels=("日期从",))
 
 
 def profile_for_module(module: str) -> FilterProfile:
@@ -33,6 +34,7 @@ def profile_for_module(module: str) -> FilterProfile:
     profiles = {
         "position_rpa": POSITION_FILTER,
         "trade_rpa": TRADE_FILTER,
+        "fund_rpa": FUND_FILTER,
     }
     try:
         return profiles[module]
@@ -177,7 +179,7 @@ def after_import_query(module: str, excel_path: Path | str) -> str:
     从 Excel 读账单日，用「前一工作日」作为查询起始日（终止日留空）。
     返回实际填入的查询起始日 YYYY-MM-DD。
     """
-    bill_date = read_bill_date(Path(excel_path))
+    bill_date = read_bill_date(Path(excel_path), allow_multi=(module == "fund_rpa"))
     query_date = previous_workday(bill_date)
     print(f"bill_date={bill_date} query_from={query_date} (previous workday)")
     filter_by_bill_date(module, query_date)

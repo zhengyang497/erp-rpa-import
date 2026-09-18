@@ -8,7 +8,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 # 持仓模板 / 成交模板列名
-_DATE_HEADERS = ("持仓日期", "交易日", "交易日期", "账单日")
+_DATE_HEADERS = ("持仓日期", "交易日", "交易日期", "账单日", "日期")
 
 
 def _as_date(value) -> date | None:
@@ -55,10 +55,11 @@ def previous_workday(value: date | str) -> str:
     raise RuntimeError(f"无法计算 {d.isoformat()} 的前一工作日")
 
 
-def read_bill_date(path: Path) -> str:
+def read_bill_date(path: Path, *, allow_multi: bool = False) -> str:
     """
-    读取模板中的统一账单日，返回 YYYY-MM-DD。
-    持仓列「持仓日期」、成交列「交易日」；要求非空行同一日。
+    读取模板中的账单日，返回 YYYY-MM-DD。
+    持仓列「持仓日期」、成交列「交易日」、资金列「日期」。
+    默认要求非空行同一日；allow_multi=True 时取最早日（资金多日模板）。
     """
     path = Path(path)
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -89,6 +90,8 @@ def read_bill_date(path: Path) -> str:
         if not found:
             raise RuntimeError(f"模板无有效账单日: {path}")
         if len(found) > 1:
+            if allow_multi:
+                return min(found).isoformat()
             raise RuntimeError(f"模板账单日不唯一: {sorted(found)} @ {path.name}")
         return next(iter(found)).isoformat()
     finally:

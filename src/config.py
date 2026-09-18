@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""路径与四类导入映射（对应 option-margin v2 四份输出）。
+"""路径与导入映射（option-margin v2/v3 + 商品价格指数）。
 
-四条链路共用同一套：Excel批量导入 → 粘贴 → 检查 → 导入 → 关窗。
-仅以下三项按流程不同：
+共用同一套：打开导入 → 粘贴 → 检查 → 导入 → 关窗。
+仅以下按流程不同：
   - module：主菜单进哪个模块
   - tab / tab_needle：模块内页签
-  - filename：V2 账单 Excel 路径
+  - filename / output_folder：Excel 路径
+  - open_import / query_after / close_tab_after
 """
 from __future__ import annotations
 
@@ -14,20 +15,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def _default_output_v2() -> Path:
-    """V2 账单目录：环境变量 > 同级 option-margin/output_v2 > 本仓库 output_v2。"""
+def _default_output_dir(folder: str) -> Path:
+    """账单目录：环境变量 > 同级 option-margin/<folder> > 本仓库 <folder>。"""
     env = os.environ.get("ERP_RPA_OUTPUT_DIR")
     if env:
         return Path(env)
     root = Path(__file__).resolve().parent.parent
-    sibling = root.parent / "option-margin" / "output_v2"
+    sibling = root.parent / "option-margin" / folder
     if sibling.is_dir():
         return sibling
-    return root / "output_v2"
+    return root / folder
+
+
+def _default_output_v2() -> Path:
+    return _default_output_dir("output_v2")
+
+
+def _default_output_v3() -> Path:
+    return _default_output_dir("output_v3")
 
 
 # 默认读 v2 输出目录（可用 ERP_RPA_OUTPUT_DIR 或 --output-dir 覆盖）
 DEFAULT_OUTPUT_V2 = _default_output_v2()
+DEFAULT_OUTPUT_V3 = _default_output_v3()
+DEFAULT_PRICE_DIR = Path(os.environ.get("ERP_RPA_PRICE_DIR", r"E:\RPA\价格导入"))
 
 
 @dataclass(frozen=True)
@@ -35,12 +46,18 @@ class ImportFlow:
     key: str
     name: str
     filename: str
-    # position_rpa | trade_rpa  —— 菜单
+    # position_rpa | trade_rpa | fund_rpa | price_rpa  —— 菜单
     module: str
-    # futures_swap | option  —— 页签语义
+    # futures_swap | option | fund | price  —— 页签语义
     tab: str
     # 文档子签 OCR 目标文案
     tab_needle: str
+    # option-margin 输出子目录：output_v2 / output_v3；price = DEFAULT_PRICE_DIR
+    output_folder: str = "output_v2"
+    # excel_batch = Excel批量导入；template = 模板导入
+    open_import: str = "excel_batch"
+    query_after: bool = True
+    close_tab_after: bool = False
 
 
 FLOWS: dict[str, ImportFlow] = {
@@ -77,12 +94,40 @@ FLOWS: dict[str, ImportFlow] = {
         tab="futures_swap",
         tab_needle="商品衍生品",
     ),
+    "fund_detail": ImportFlow(
+        key="fund_detail",
+        name="境外场外资金明细",
+        filename="境外场外资金情况导入模板.xlsx",
+        module="fund_rpa",
+        tab="fund",
+        tab_needle="境外场外资金情况",
+        output_folder="output_v3",
+    ),
+    "price_index": ImportFlow(
+        key="price_index",
+        name="商品价格指数",
+        filename="NEW.xlsx",
+        module="price_rpa",
+        tab="price",
+        tab_needle="商品指数登记",
+        output_folder="price",
+        open_import="template",
+        query_after=False,
+        close_tab_after=True,
+    ),
 }
 
 
 def resolve_file(flow: ImportFlow, output_dir: Path | None = None) -> Path:
-    root = output_dir or DEFAULT_OUTPUT_V2
+    if output_dir is not None:
+        root = output_dir
+    elif flow.output_folder == "output_v3":
+        root = DEFAULT_OUTPUT_V3
+    elif flow.output_folder == "price":
+        root = DEFAULT_PRICE_DIR
+    else:
+        root = DEFAULT_OUTPUT_V2
     path = root / flow.filename
     if not path.is_file():
-        raise FileNotFoundError(f"找不到 V2 输出文件: {path}")
+        raise FileNotFoundError(f"找不到输出文件: {path}")
     return path.resolve()

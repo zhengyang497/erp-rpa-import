@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from menu_nav import open_module, open_position_rpa_module, open_trade_rpa_module
+from menu_nav import open_module
 
 
 def main() -> None:
@@ -18,7 +18,7 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="OCR 导航到目标项但不点击打开")
     ap.add_argument(
         "--module",
-        choices=("position_rpa", "trade_rpa"),
+        choices=("position_rpa", "trade_rpa", "fund_rpa", "price_rpa"),
         default="position_rpa",
     )
     ap.add_argument("--no-verify", action="store_true")

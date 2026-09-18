@@ -12,9 +12,11 @@ from pywinauto import Desktop, keyboard, mouse
 from erp import focus_frame
 
 try:
+    import win32api
     import win32clipboard
     import win32con
 except ImportError:  # pragma: no cover
+    win32api = None
     win32clipboard = None
     win32con = None
 
@@ -34,17 +36,20 @@ def set_clipboard_text(text: str) -> None:
         win32clipboard.CloseClipboard()
 
 
-def list_dialogs():
+def list_dialogs(*, min_w: int = 80, min_h: int = 60, visible_only: bool = False):
+    """枚举 SunAwtDialog。结果小窗可能 <200x150，默认放宽尺寸过滤。"""
     out = []
-    for w in Desktop(backend="win32").windows(class_name="SunAwtDialog", visible_only=False):
+    for w in Desktop(backend="win32").windows(
+        class_name="SunAwtDialog", visible_only=visible_only
+    ):
         try:
-            t = w.window_text() or ""
+            title = w.window_text() or ""
             r = w.rectangle()
             h = w.handle
         except Exception:
             continue
-        if r.width() > 200 and r.height() > 150:
-            out.append((t, r, h, w))
+        if r.width() > min_w and r.height() > min_h:
+            out.append((title, r, h, w))
     return out
 
 
@@ -107,14 +112,20 @@ def yellow_icon_centers(img: Image.Image) -> list[tuple[int, int]]:
     return centers
 
 
-def _named_rect(frame, name: str):
+def _named_rect(frame, name: str, *, in_content: bool = False):
+    from menu_nav import _point_in_frame_content
+
     for c in frame.descendants():
         try:
             n = (c.element_info.name or "").strip()
         except Exception:
             continue
-        if n == name:
-            return c.rectangle()
+        if n != name:
+            continue
+        r = c.rectangle()
+        if in_content and not _point_in_frame_content(frame, r):
+            continue
+        return r
     return None
 
 
@@ -301,6 +312,119 @@ def click_excel_batch_import(*, timeout: float = 15.0) -> bool:
     return False
 
 
+def _template_import_band_box(fr, named=None) -> tuple[int, int, int, int]:
+    """价格指数页「模板导入」在查询表单下方工具栏。top+230 会裁掉该行。"""
+    if named is not None:
+        return (
+            max(fr.left, named.left - 40),
+            max(fr.top, named.top - 20),
+            min(fr.right, named.right + 40),
+            min(fr.bottom, named.bottom + 20),
+        )
+    return (
+        fr.left,
+        fr.top + 70,
+        min(fr.right, fr.left + 980),
+        min(fr.bottom, fr.top + 430),
+    )
+
+
+def _template_import_click_points(hits, band_box) -> list[tuple[int, int]]:
+    from ocr_util import click_point_for_needle
+
+    pts: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for h in hits:
+        t = (h.text or "").replace(" ", "").replace("\u3000", "")
+        if "模板导入" not in t:
+            continue
+        rx, ry = click_point_for_needle(h, "模板导入")
+        p = (band_box[0] + rx, band_box[1] + ry)
+        if p not in seen:
+            seen.add(p)
+            pts.append(p)
+    return pts
+
+
+def _ocr_hits_native_and_scaled(band):
+    from ocr_util import OcrHit, ocr_image
+
+    hits = list(ocr_image(band))
+    scaled = band.resize((band.width * 2, band.height * 2))
+    for h in ocr_image(scaled):
+        hits.append(
+            OcrHit(
+                text=h.text,
+                conf=h.conf,
+                left=h.left // 2,
+                top=h.top // 2,
+                right=h.right // 2,
+                bottom=h.bottom // 2,
+            )
+        )
+    return hits
+
+
+def click_template_import(*, timeout: float = 15.0) -> bool:
+    """点击「模板导入」打开导入对话框（价格指数页；不用 Excel批量导入）。"""
+    frame = focus_frame()
+    if find_import_dialog()[0] is not None:
+        return True
+
+    _dismiss_error_dialogs()
+    focus_frame(frame)
+
+    fr = frame.rectangle()
+    named = _named_rect(frame, "模板导入", in_content=True)
+    band_box = _template_import_band_box(fr, named)
+
+    band = ImageGrab.grab(bbox=band_box)
+    band.save(Path(__file__).with_name("debug_template_import_band.png"))
+
+    candidates: list[tuple[int, int]] = []
+
+    try:
+        hits = _ocr_hits_native_and_scaled(band)
+        print(f"ocr 模板导入 texts={[h.text for h in hits[:50]]}")
+        ocr_pts = _template_import_click_points(hits, band_box)
+        for p in ocr_pts:
+            if p not in candidates:
+                candidates.append(p)
+                print(f"ocr 模板导入 candidate {p}")
+    except Exception as e:
+        print(f"ocr 模板导入 skipped: {e}")
+
+    if named is not None:
+        p = ((named.left + named.right) // 2, (named.top + named.bottom) // 2)
+        if p not in candidates:
+            candidates.append(p)
+            print(f"named 模板导入 candidate {p} rect={named}")
+
+    if not candidates:
+        try:
+            ImageGrab.grab(bbox=(fr.left, fr.top, fr.right, min(fr.bottom, fr.top + 420))).save(
+                Path(__file__).with_name("debug_template_import_top.png")
+            )
+        except Exception:
+            pass
+        raise RuntimeError(
+            "未定位到 模板导入：当前不是商品价格指数登记页（OCR/可见控件均无此按钮）"
+        )
+
+    per_try = max(timeout / len(candidates), 8.0)
+    for i, click_pos in enumerate(candidates):
+        mouse.click(coords=click_pos)
+        print(f"click 模板导入 attempt={i + 1}/{len(candidates)} at {click_pos}")
+        deadline = time.time() + per_try
+        while time.time() < deadline:
+            dlg, title, rect = find_import_dialog()
+            if dlg is not None:
+                print(f"opened dialog: {title!r} {rect}")
+                return True
+            time.sleep(0.25)
+    return False
+
+
 def _click_dialog_button(dlg, name: str, *, allow_zero_size: bool = True) -> bool:
     """
     点对话框按钮。实测「关闭/确认/放弃」常被暴露为 0×0 矩形，但仍有有效 left/top，
@@ -334,8 +458,8 @@ def _click_result_close(dlg) -> bool:
     return True
 
 
-def _focus_file_field(dlg) -> None:
-    """点「导入文件」标签右侧空白区，准备 Ctrl+V。"""
+def _file_path_canvas(dlg):
+    """导入文件标签右侧的路径框（价格指数为 SunAwtCanvas，不是原生 Edit）。"""
     label = None
     for c in dlg.descendants():
         try:
@@ -345,11 +469,82 @@ def _focus_file_field(dlg) -> None:
         except Exception:
             continue
     if label is None:
-        r = dlg.rectangle()
-        mouse.click(coords=(r.left + 400, r.top + 120))
+        return None, None
+    for c in dlg.descendants():
+        try:
+            cls = (c.element_info.class_name or "")
+            rr = c.rectangle()
+        except Exception:
+            continue
+        if cls != "SunAwtCanvas":
+            continue
+        if abs(rr.left - label.right) > 8:
+            continue
+        if abs(rr.top - label.top) > 12:
+            continue
+        if rr.width() >= 80 and 16 <= rr.height() <= 40:
+            return label, rr
+    return label, None
+
+
+def _focus_file_field(dlg) -> None:
+    """点「导入文件」右侧路径框，准备 Ctrl+V。"""
+    label, canvas = _file_path_canvas(dlg)
+    if canvas is not None:
+        mouse.click(coords=((canvas.left + canvas.right) // 2, (canvas.top + canvas.bottom) // 2))
+        time.sleep(0.2)
         return
-    mouse.click(coords=(label.right + 40, (label.top + label.bottom) // 2))
+    if label is not None:
+        mouse.click(coords=(label.right + 40, (label.top + label.bottom) // 2))
+        time.sleep(0.2)
+        return
+    r = dlg.rectangle()
+    mouse.click(coords=(r.left + 400, r.top + 120))
+
+
+def _native_hotkey(*vk_codes: int) -> None:
+    """SendInput-style Ctrl+A/V，Swing 画布收得到；pywinauto send_keys 常打到旁路 RichEdit。"""
+    if win32api is None or win32con is None:
+        combo = "^a" if vk_codes[-1] == ord("A") else "^v"
+        keyboard.send_keys(combo)
+        return
+    for vk in vk_codes:
+        win32api.keybd_event(vk, 0, 0, 0)
+        time.sleep(0.03)
+    for vk in reversed(vk_codes):
+        win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+        time.sleep(0.03)
+
+
+def _paste_into_file_field(dlg) -> None:
+    r = dlg.rectangle()
+    mouse.click(coords=((r.left + r.right) // 2, r.top + 8))
     time.sleep(0.2)
+    _focus_file_field(dlg)
+    time.sleep(0.25)
+    vk_ctrl = win32con.VK_CONTROL if win32con is not None else 0x11
+    _native_hotkey(vk_ctrl, ord("A"))
+    time.sleep(0.12)
+    _native_hotkey(vk_ctrl, ord("V"))
+
+
+def _path_visible_in_field(dlg, file_path: Path) -> bool:
+    """OCR 路径框，确认文件名已粘贴进去。"""
+    from ocr_util import ocr_image, normalize_text
+
+    _, canvas = _file_path_canvas(dlg)
+    if canvas is None:
+        return False
+    pad = 4
+    bbox = (canvas.left - pad, canvas.top - pad, canvas.right + pad, canvas.bottom + pad)
+    img = ImageGrab.grab(bbox=bbox)
+    hits = ocr_image(img)
+    blob = normalize_text("".join(h.text for h in hits))
+    name = normalize_text(file_path.name)
+    stem = normalize_text(file_path.stem)
+    ok = (name in blob) or (stem in blob) or ("xlsx" in blob)
+    print(f"path field ocr={blob!r} expect={name!r} ok={ok}")
+    return ok
 
 
 def _wait_progress_done(
@@ -428,34 +623,117 @@ def _wait_ready_for_import(*, timeout: float = 45.0) -> object:
     raise RuntimeError("检查数据后导入对话框未就绪（进度未结束或主框消失）")
 
 
+def _classify_import_message(joined: str, texts: list[str]) -> str | None:
+    """从结果窗文案判定 status；无法判定则返回 None。"""
+    if "没有可以导入" in joined:
+        return "empty"
+    if any(k in joined for k in ("失败", "错误", "异常")):
+        return "fail"
+    if "成功导入" in joined or "导入成功" in joined or "条记录" in joined:
+        return "ok"
+    if "完成" in joined:
+        return "ok"
+    if "关闭" in texts and len(joined) > 10:
+        return "fail" if any(k in joined for k in ("失败", "错误")) else "ok"
+    return None
+
+
+def _ocr_import_result():
+    """结果窗可能无 win32 文案；OCR 全屏找成功/空文件。返回 (status, msg, dlg_or_main)。"""
+    from ocr_util import ocr_image
+
+    try:
+        img = ImageGrab.grab()
+        hits = ocr_image(img)
+    except Exception as exc:
+        print(f"ocr import result skipped: {exc}")
+        return None, "", None
+    texts = [h.text for h in hits if h.text.strip()]
+    joined = "\n".join(texts)
+    status = None
+    if "没有可以导入" in joined:
+        status = "empty"
+    elif "成功导入" in joined or "导入成功" in joined:
+        status = "ok"
+    elif any("条记录" in t and "导入" in joined for t in texts):
+        status = "ok"
+    if status is None:
+        return None, "", None
+    dlg, _, _ = find_import_dialog()
+    for title, r, h, w in list_dialogs(min_w=50, min_h=40):
+        names = set(_dialog_named_texts(w))
+        if "检查数据" in names and "导入数据" in names:
+            continue
+        if r.width() < 900 and r.height() < 500:
+            return status, joined[:300], w
+    return status, joined[:300], dlg
+
+
 def _wait_import_result(*, timeout: float) -> tuple[str, str, object]:
     """
-    等待「导入数据」结果窗出现可读文案。
+    等待导入结果窗出现可读文案。
     返回 (status, message, dialog)；status: ok | empty | fail
     - empty：没有可以导入的记录（空文件/无有效行）——不算失败
+    兼容：标题非「导入数据」的结果小窗、尺寸较小的弹窗；等待中顺手关掉挡路「警告」。
     """
     deadline = time.time() + timeout
+    seen_unclassified: list[str] = []
+    last_ocr = 0.0
     while time.time() < deadline:
-        w, title, _ = find_progress_dialog("导入数据")
-        if w is None:
-            time.sleep(0.25)
-            continue
-        texts = _dialog_named_texts(w)
-        joined = "\n".join(texts)
-        if "没有可以导入" in joined:
-            return "empty", joined, w
-        if any(k in joined for k in ("失败", "错误", "异常")):
-            return "fail", joined, w
-        if "成功导入" in joined:
-            return "ok", joined, w
-        if "完成" in joined:
-            return "ok", joined, w
-        if "关闭" in texts and len(joined) > 10:
-            if any(k in joined for k in ("失败", "错误")):
-                return "fail", joined, w
-            return "ok", joined, w
+        # 挡路警告（查询限制等）先关掉，避免挡住结果窗识别
+        for title, r, h, w in list_dialogs(min_w=50, min_h=40):
+            names = set(_dialog_named_texts(w))
+            joined = "\n".join(names)
+            if "检查数据" in names and "导入数据" in names:
+                # 价格指数：结果文案可能写在主导入框上
+                st = None
+                if "成功导入" in joined or "导入成功" in joined or "没有可以导入" in joined:
+                    st = _classify_import_message(joined, list(names))
+                if st is not None:
+                    print(f"import result on main dialog title={title!r} status={st}")
+                    return st, joined, w
+                continue
+            if (title or "").strip() == "警告" or "查询限制" in joined:
+                if _click_dialog_button(w, "关闭") or _click_dialog_button(w, "确定"):
+                    print(f"dismissed blocking popup during import wait: {title!r}")
+                    time.sleep(0.3)
+
+        candidates = []
+        for title, r, h, w in list_dialogs(min_w=50, min_h=40):
+            names = _dialog_named_texts(w)
+            name_set = set(names)
+            # 跳过主导入框（无结果文案时）
+            if "检查数据" in name_set and "导入数据" in name_set:
+                continue
+            joined = "\n".join(names)
+            status = _classify_import_message(joined, names)
+            if status is not None:
+                score = 2 if (title or "") == "导入数据" else 1
+                if "成功导入" in joined or "没有可以导入" in joined or "导入成功" in joined:
+                    score += 2
+                candidates.append((score, status, joined, w, title))
+            else:
+                key = f"{title!r}|{r.width()}x{r.height()}|{joined[:80]}"
+                if key not in seen_unclassified:
+                    seen_unclassified.append(key)
+                    print(f"unclassified dialog during wait: title={title!r} size={r.width()}x{r.height()} names={names[:12]}")
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            _, status, joined, w, title = candidates[0]
+            print(f"import result dialog title={title!r} status={status}")
+            return status, joined, w
+
+        now = time.time()
+        if now - last_ocr >= 2.0:
+            last_ocr = now
+            ocr_status, ocr_msg, ocr_dlg = _ocr_import_result()
+            if ocr_status is not None:
+                print(f"import result via OCR status={ocr_status} msg={ocr_msg[:80]!r}")
+                return ocr_status, ocr_msg, ocr_dlg
         time.sleep(0.3)
-    raise RuntimeError("等待导入结果超时")
+    extra = "; ".join(seen_unclassified[:6])
+    raise RuntimeError(f"等待导入结果超时; unclassified={extra}")
 
 
 def dismiss_post_import_popups(*, timeout: float = 8.0) -> int:
@@ -511,8 +789,9 @@ def finish_after_import(*, timeout: float = 30.0, kill_excel: bool = False) -> d
     status, message, result_dlg = _wait_import_result(timeout=timeout)
     print(f"import result: {status}; msg={message[:120]!r}")
 
-    _click_result_close(result_dlg)
-    time.sleep(0.5)
+    if result_dlg is not None:
+        _click_result_close(result_dlg)
+        time.sleep(0.5)
 
     # 关掉主导入框
     for _ in range(3):
@@ -574,20 +853,33 @@ def run_dialog_import(
     print(f"import into {title!r}: {path}")
     set_clipboard_text(path)
     time.sleep(0.2)
-    _focus_file_field(dlg)
-    keyboard.send_keys("^a")
-    time.sleep(0.1)
-    keyboard.send_keys("^v")
-    time.sleep(1.2)
-
-    dlg, _, _ = find_import_dialog()
-    if dlg is None:
-        raise RuntimeError("粘贴后对话框消失")
+    pasted = False
+    for attempt in range(3):
+        _paste_into_file_field(dlg)
+        time.sleep(1.5)
+        dlg, _, _ = find_import_dialog()
+        if dlg is None:
+            raise RuntimeError("粘贴后对话框消失")
+        if _path_visible_in_field(dlg, file_path):
+            pasted = True
+            break
+        print(f"path paste attempt {attempt + 1} not visible, retry")
+    if not pasted:
+        print("path OCR did not confirm file name; continue anyway")
+    time.sleep(0.4)
     if not _click_dialog_button(dlg, "检查数据"):
         raise RuntimeError("未找到「检查数据」按钮")
     print("clicked 检查数据, waiting progress...")
     _wait_progress_done("检查数据", timeout=wait_check, min_wait=3.0)
     dlg = _wait_ready_for_import(timeout=max(45.0, wait_check * 0.5))
+    # 打印「导入数据」按钮矩形，便于排查 0×0 误点
+    for c in dlg.descendants():
+        try:
+            if (c.element_info.name or "").strip() == "导入数据":
+                r = c.rectangle()
+                print(f"导入数据 button rect=({r.left},{r.top},{r.right},{r.bottom}) {r.width()}x{r.height()}")
+        except Exception:
+            continue
     if not _click_dialog_button(dlg, "导入数据"):
         raise RuntimeError("未找到「导入数据」按钮")
     print("clicked 导入数据, waiting result...")

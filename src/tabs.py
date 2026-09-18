@@ -89,13 +89,32 @@ def _click_tab_by_blue_segments(prefer: str) -> bool:
 
 def switch_tab(tab: str, *, tab_needle: str | None = None) -> None:
     """
-    tab: futures_swap | option
+    tab: futures_swap | option | fund | price
     tab_needle: 优先 OCR 的完整子签文案（各流程在 config 里配置）
+    fund / price：菜单已打开目标界面，通常单页签；有 needle 则点一下确认，找不到则跳过。
     """
-    if tab not in ("futures_swap", "option"):
+    if tab not in ("futures_swap", "option", "fund", "price"):
         raise ValueError(tab)
 
     frame = focus_frame()
+    if tab in ("fund", "price"):
+        bbox = _tab_band(frame)
+        img = ImageGrab.grab(bbox=bbox)
+        hits = ocr_image(img)
+        hit = find_best_hit(hits, tab_needle, min_score=75.0) if tab_needle else None
+        if hit is None and tab == "fund" and tab_needle:
+            hit = find_best_hit(hits, "资金情况", min_score=70.0)
+        if hit is None and tab == "price" and tab_needle:
+            hit = find_best_hit(hits, "指数登记", min_score=70.0)
+        if hit is not None:
+            cx, cy = hit.center
+            abs_pos = (bbox[0] + cx, bbox[1] + cy)
+            print(f"tab OCR click {tab} via {hit.text!r} at {abs_pos} conf={hit.conf:.2f}")
+            mouse.click(coords=abs_pos)
+            time.sleep(0.5)
+        else:
+            print(f"tab {tab}: single-doc screen, skip tab switch")
+        return
     bbox = _tab_band(frame)
     img = ImageGrab.grab(bbox=bbox)
     img.save(Path(__file__).with_name("debug_tabs_switch.png"))
@@ -125,3 +144,25 @@ def switch_tab(tab: str, *, tab_needle: str | None = None) -> None:
     print(f"tab fixed-offset fallback for {tab} at {(x, y)}")
     mouse.click(coords=(x, y))
     time.sleep(0.6)
+
+
+def close_document_tab(needle: str) -> None:
+    """尽力关掉文档页签：OCR 页签文案，点其右侧关闭。失败只 print。"""
+    try:
+        frame = focus_frame()
+        bbox = _tab_band(frame)
+        img = ImageGrab.grab(bbox=bbox)
+        hits = ocr_image(img)
+        hit = find_best_hit(hits, needle, min_score=70.0)
+        if hit is None:
+            hit = find_best_hit(hits, "指数登记", min_score=70.0)
+        if hit is None:
+            print(f"close tab: OCR miss {needle!r}, skip")
+            return
+        x = bbox[0] + hit.right + 12
+        y = bbox[1] + hit.center[1]
+        print(f"close tab {hit.text!r} click X at {(x, y)}")
+        mouse.click(coords=(x, y))
+        time.sleep(0.45)
+    except Exception as exc:
+        print(f"close tab failed: {exc}")

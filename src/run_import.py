@@ -16,13 +16,21 @@ from ops_log import JobLogger
 from runner import cleanup_after_failure, run_flow
 
 
-# 单跑时的可选 key
-ORDER = ("option_position", "option_trade", "merged_position", "merged_trade")
+# 单跑时的可选 key（price_index 仅单独入口，不进 all）
+ORDER = (
+    "option_position",
+    "option_trade",
+    "merged_position",
+    "merged_trade",
+    "fund_detail",
+    "price_index",
+)
 
 # all：按模块分组——每组只导航菜单一次，组内后续只切页签
 MODULE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("position_rpa", ("option_position", "merged_position")),
     ("trade_rpa", ("option_trade", "merged_trade")),
+    ("fund_rpa", ("fund_detail",)),
 )
 
 
@@ -35,6 +43,7 @@ def _run_one(
     wait_import: float,
     raise_on_fail: bool,
     log: JobLogger | None,
+    file_path: Path | None = None,
 ) -> dict:
     flow = FLOWS[key]
     if log:
@@ -44,6 +53,7 @@ def _run_one(
             key,
             output_dir=output_dir,
             skip_menu=skip_menu,
+            file_path=file_path,
             wait_check=wait_check,
             wait_import=wait_import,
             raise_on_fail=raise_on_fail,
@@ -102,15 +112,16 @@ def _run_one(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="ERP 导入：对应 option-margin V2 四份输出")
+    ap = argparse.ArgumentParser(description="ERP 导入：option-margin V2 四份 + V3 资金；price_index 单独跑")
     ap.add_argument(
         "flow",
         nargs="?",
         choices=[*ORDER, "all"],
         default="all",
-        help="option_position|option_trade|merged_position|merged_trade|all",
+        help="option_position|option_trade|merged_position|merged_trade|fund_detail|price_index|all",
     )
     ap.add_argument("--output-dir", type=Path, default=None)
+    ap.add_argument("--file", type=Path, default=None, help="覆盖默认 Excel 路径（单跑时有效）")
     ap.add_argument(
         "--skip-menu",
         action="store_true",
@@ -170,6 +181,7 @@ def main() -> int:
         wait_import=args.wait_import,
         raise_on_fail=True,
         log=log,
+        file_path=args.file,
     )
     report = log.write_problem_report()
     if result.get("status") == "fail":
